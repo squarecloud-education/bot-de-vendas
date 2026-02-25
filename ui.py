@@ -1,8 +1,16 @@
-﻿import discord
+import logging
+import time
+
+import discord
 from discord import ui
+from sqlalchemy import select
+
+from config import CARGO_GESTOR_ID, CANAL_LOJA_ID
 from database import Produto, Session
 from pagamentos import gerar_pagamento, verificar_pagamento
-from config import CARGO_GESTOR_ID
+from utils import marcar_loja_para_atualizar
+
+logger = logging.getLogger(__name__)
 
 class GerenciarProdutos(ui.LayoutView):
     def __init__(self):
@@ -73,35 +81,122 @@ class VerProdutos(ui.LayoutView):
                     container.add_item(ui.Separator())
 
 class ComprarProdutoBotao(ui.Button):
+    cooldown_segundos = 10
+    _cooldowns = {}
+
     def __init__(self, produto_id):
         super().__init__(label="Comprar", style=discord.ButtonStyle.green, custom_id=f"Comprar_{produto_id}")
         self.produto_id = produto_id
+
+    @classmethod
+    def _tempo_restante(cls, user_id:int):
+        expira = cls._cooldowns.get(user_id, 0)
+        restante = expira - time.monotonic()
+        return restante if restante > 0 else 0
+
+    @classmethod
+    def _em_cooldown(cls, user_id:int):
+        return cls._tempo_restante(user_id) > 0
+
+    @classmethod
+    def _definir_cooldown(cls, user_id:int):
+        cls._cooldowns[user_id] = time.monotonic() + cls.cooldown_segundos
+
+    def _consumir_estoque(self):
+        with Session() as session:
+            transacao = session.begin()
+            try:
+                resultado = session.execute(
+                    select(Produto).where(Produto.id == self.produto_id).with_for_update()
+                ).scalar_one_or_none()
+                if not resultado or resultado.estoque <= 0:
+                    transacao.rollback()
+                    logger.warning("Tentativa de compra sem estoque para produto %s", self.produto_id)
+                    return False
+
+                resultado.estoque -= 1
+                transacao.commit()
+            except Exception:
+                transacao.rollback()
+                raise
+
+        marcar_loja_para_atualizar()
+        return True
+
+    async def _notificar_gestores(self, interact:discord.Interaction, produto_nome:str):
+        canal = interact.client.get_channel(CANAL_LOJA_ID)
+        if not canal:
+            try:
+                canal = await interact.client.fetch_channel(CANAL_LOJA_ID)
+            except Exception:
+                logger.exception("Não foi possível notificar o canal de gestão %s", CANAL_LOJA_ID)
+                return
+
+        await canal.send(f"Nova compra realizada por {interact.user.mention}: **{produto_nome}**.")
     
     async def callback(self, interact:discord.Interaction):
+        if self._em_cooldown(interact.user.id):
+            restante = int(self._tempo_restante(interact.user.id)) + 1
+            return await interact.response.send_message(f"Aguarde {restante}s antes de tentar novamente.", ephemeral=True)
+
+        self._definir_cooldown(interact.user.id)
         await interact.response.defer(ephemeral=True)
+
         with Session() as session:
             produto:Produto = session.query(Produto).get(self.produto_id)
-            pagamento_id, qrcode = gerar_pagamento(produto.preco)
+            if not produto or not produto.ativo:
+                return await interact.followup.send("Produto indisponível no momento.", ephemeral=True)
 
-            qrcode = discord.File(qrcode, filename="qrcode.png")
-            embed = discord.Embed(title="Realize o pagamento no QR Code abaixo para prosseguir.", color=discord.Colour.green())
-            embed.set_image(url="attachment://qrcode.png")
+            if produto.estoque <= 0:
+                return await interact.followup.send("Produto sem estoque!", ephemeral=True)
 
-            pagamento_msg = await interact.followup.send(embed=embed, ephemeral=True, file=qrcode)
+            preco = produto.preco
+            produto_nome = produto.nome
+            descricao = produto.descricao
 
-            pagamento_status = await verificar_pagamento(pagamento_id, cooldown=5)
-            if not pagamento_status:
-                await interact.followup.send("O pagamento não foi encontrado. Caso o tenha feito, entre com contato com o suporte.", ephemeral=True)
-                await pagamento_msg.delete()
-                return
-            
-            canal_loja = interact.channel
-            ticket = await canal_loja.create_thread(name=interact.user.name, type=discord.ChannelType.private_thread)
-            await ticket.add_user(interact.user)
-            await ticket.send(f"Olá, {interact.user.name}! Obrigado por comprar conosco. Aguarde um momento que jajá alguém virá te atender!\nProduto: {produto.nome}\n<@&{CARGO_GESTOR_ID}>")
+        pagamento_id, qrcode = gerar_pagamento(preco, interact.user.id, self.produto_id)
+        if not pagamento_id or not qrcode:
+            return await interact.followup.send("Não foi possível gerar o pagamento. Tente novamente mais tarde.", ephemeral=True)
 
-            await interact.followup.send(embed=discord.Embed(title=f"O pagamento foi concluído com sucesso!\nProssiga para o ticket: {ticket.mention}"), ephemeral=True)
+        qrcode = discord.File(qrcode, filename="qrcode.png")
+        embed = discord.Embed(
+            title="Realize o pagamento no QR Code abaixo para prosseguir.",
+            description=f"Produto: **{produto_nome}**\nValor: R$ {preco:.2f}",
+            color=discord.Colour.green()
+        )
+        if descricao:
+            embed.add_field(name="Descrição", value=descricao[:1024], inline=False)
+        embed.set_image(url="attachment://qrcode.png")
+
+        pagamento_msg = await interact.followup.send(embed=embed, ephemeral=True, file=qrcode)
+
+        pagamento_status = await verificar_pagamento(
+            pagamento_id,
+            preco,
+            interact.user.id,
+            self.produto_id,
+            cooldown=5
+        )
+        if not pagamento_status:
+            await interact.followup.send("O pagamento não foi encontrado. Caso o tenha feito, entre com contato com o suporte.", ephemeral=True)
             await pagamento_msg.delete()
+            return
+
+        if not self._consumir_estoque():
+            await interact.followup.send("O estoque do produto acabou antes de concluirmos sua compra.", ephemeral=True)
+            await pagamento_msg.delete()
+            return
+
+        logger.info("Compra confirmada do produto %s pelo usuário %s", self.produto_id, interact.user.id)
+            
+        canal_loja = interact.channel
+        ticket = await canal_loja.create_thread(name=interact.user.name, type=discord.ChannelType.private_thread)
+        await ticket.add_user(interact.user)
+        await ticket.send(f"Olá, {interact.user.name}! Obrigado por comprar conosco. Aguarde um momento que jajá alguém virá te atender!\nProduto: {produto_nome}\n<@&{CARGO_GESTOR_ID}>")
+
+        await self._notificar_gestores(interact, produto_nome)
+        await interact.followup.send(embed=discord.Embed(title=f"O pagamento foi concluído com sucesso!\nProssiga para o ticket: {ticket.mention}"), ephemeral=True)
+        await pagamento_msg.delete()
 
 class AdicionarProdutoBotao(ui.Button):
     def __init__(self):
@@ -120,8 +215,12 @@ class RemoverProdutoBotao(ui.Button):
         produto_id = self.produto_id
         with Session() as session:
             produto = session.query(Produto).get(produto_id)
+            if not produto:
+                return await interact.response.send_message("Produto não encontrado.", ephemeral=True)
             session.delete(produto)
             session.commit()
+            marcar_loja_para_atualizar()
+            logger.info("Produto %s removido por %s", produto.nome, interact.user.id)
         
         await interact.response.send_message(f"Produto deletado com sucesso!", ephemeral=True)
         await interact.message.edit(view=GerenciarProdutos())
@@ -200,12 +299,16 @@ class ProdutoModal(ui.Modal):
                 produto.estoque = estoque
                 produto.ativo = ativo
                 session.commit()
+                marcar_loja_para_atualizar()
+                logger.info("Produto %s atualizado por %s", produto.id, interact.user.id)
 
                 msg = "Produto editado com sucesso!"
             else:
                 produto = Produto(nome=nome, descricao=descricao, preco=preco, estoque=estoque, ativo=ativo)
                 session.add(produto)
                 session.commit()
+                marcar_loja_para_atualizar()
+                logger.info("Produto %s criado por %s", produto.id, interact.user.id)
 
                 msg = "Produto adicionado com sucesso!"
             
