@@ -1,9 +1,12 @@
-# Bot de Vendas
+<div align="center">
+  <img alt="Square Cloud Banner" src="https://cdn.squarecloud.app/png/github-readme.png">
+</div>
+<h1 align="center">sales-bot</h1>
+<p align="center">A complete sales bot for Discord created with <a href="https://discordpy.readthedocs.io/" target="_blank">discord.py</a> and the <a href="https://www.mercadopago.com.br/developers" target="_blank">Mercado Pago API</a>.</p>
 
-Bot de vendas para Discord construido passo a passo durante a mini-serie de 2 videos no canal da Square Cloud no YouTube (https://www.youtube.com/@squarecloudofc). O objetivo e mostrar, de forma simples, como automatizar catalogo, pagamentos e atendimento dentro de um servidor.
+---
 
-## O que ele faz
-- Mostra os produtos ativos com botoes interativos (`/mostrar_produtos` ou atualizacao automatica no canal da loja).
-- Permite que gestores (cargo configuravel) cadastrem, editem ou removam itens sem sair do Discord.
-- Gera QR Code PIX via Mercado Pago e confirma o pagamento antes de abrir o ticket privado com o comprador.
-- Atualiza periodicamente a vitrine do canal para garantir que todos os botoes estejam sincronizados.
+This project is a **complete sales bot** for Discord developed during a series of videos on the **Square Cloud** YouTube channel, demonstrating how to build a fully professional sales system using **discord.py** and the **Mercado Pago API**.
+
+The series of videos that originated this project can be found on YouTube:
+https://youtu.be/C8ZBov6lQl0
