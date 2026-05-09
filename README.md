@@ -1,6 +1,9 @@
 <div align="center">
   <img alt="Square Cloud Banner" src="https://cdn.squarecloud.app/png/github-readme.png">
 </div>
+
+> 📌 **Note:** This README is written in Portuguese because this project was created as part of a YouTube tutorial in Portuguese.
+
 <h1 align="center">sales-bot</h1>
 <p align="center">A complete sales bot for Discord created with <a href="https://discordpy.readthedocs.io/" target="_blank">discord.py</a> and the <a href="https://www.mercadopago.com.br/developers" target="_blank">Mercado Pago API</a>.</p>
 
