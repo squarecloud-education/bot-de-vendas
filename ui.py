@@ -143,7 +143,7 @@ class ComprarProdutoBotao(ui.Button):
         await interact.response.defer(ephemeral=True)
 
         with Session() as session:
-            produto:Produto = session.query(Produto).get(self.produto_id)
+            produto:Produto = session.get(Produto, self.produto_id)
             if not produto or not produto.ativo:
                 return await interact.followup.send("Produto indisponível no momento.", ephemeral=True)
 
@@ -214,7 +214,7 @@ class RemoverProdutoBotao(ui.Button):
     async def callback(self, interact:discord.Interaction):
         produto_id = self.produto_id
         with Session() as session:
-            produto = session.query(Produto).get(produto_id)
+            produto = session.get(Produto, produto_id)
             if not produto:
                 return await interact.response.send_message("Produto não encontrado.", ephemeral=True)
             session.delete(produto)
@@ -246,7 +246,7 @@ class ProdutoModal(ui.Modal):
 
         if produto_id:
             with Session() as session:
-                produto:Produto = session.query(Produto).get(produto_id)
+                produto:Produto = session.get(Produto, produto_id)
                 self.nome.default = produto.nome
                 self.preco.default = str(produto.preco)
                 self.descricao.default = produto.descricao
@@ -292,7 +292,7 @@ class ProdutoModal(ui.Modal):
 
         with Session() as session:
             if self.produto_id:
-                produto:Produto = session.query(Produto).get(self.produto_id)
+                produto:Produto = session.get(Produto, self.produto_id)
                 produto.nome = nome
                 produto.preco = preco
                 produto.descricao = descricao

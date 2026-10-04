@@ -19,7 +19,9 @@ async def on_ready():
     bot.add_view(VerProdutos())
     if consumir_sinalizacao_loja():
         await atualizar_loja_view()
-    atualizar_loja.start()
+    # O on_ready roda de novo a cada reconexão: iniciar a task duas vezes gera RuntimeError
+    if not atualizar_loja.is_running():
+        atualizar_loja.start()
     logger.info("Bot iniciado como %s", bot.user)
 
 @bot.tree.command()
